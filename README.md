@@ -143,36 +143,275 @@ Query query = session.createNativeQuery(sql); // Query query = session.createSQL
 query.setParameter("name", name);
 ```
 
-## 文件操作
+## 文件访问类
 
-### 文件上传
+### 任意文件上传
 
-#### 1.1 原理
+#### 原理
 
-#### 1.2 修复方式
+因为前端和服务端没有正确的检验上传的文件内容、类型以及路径是否合法导致
 
-#### 1.3 最佳实践
+#### 修复方式
 
-### 文件下载
+1. 白名单方式，只允许上传白名单里的后缀文件 **【优先】**
+2. 黑名单方式（容易绕过）
+3. 上传文件后随机命名（利用时间戳+随机数字组合等）**【优先】**
+4. 检测文件内容以及文件Content-Type【Content-Type方式容易绕过】
+5. 限定只能上传的文件到指定的目录，不允许目录穿越 **【优先】**
 
-#### 1.1 原理
+#### 最佳实践
 
-#### 1.2 修复方式
+##### 白名单检测文件后缀名
 
-#### 1.3 最佳实践
+使用File对象的getCanonicalPath方法获取上传文件的实际文件名，若检测到文件名的后缀不是允许的类型（0x00截断，小于JDK1.8），或出现java.io.IOException异常（0x00截断，JDK1.8），或包含冒号（Windows环境中需处理），则说明需要拒绝本次文件上传。
 
-### 文件遍历
+```java
+//   base/WhiteAndBlackChecker.java
+private List<String> arrayBlackList = new ArrayList<String>();
+public List<String> getWhiteList() {
+        return arrayWhiteList;
+}
 
-#### 1.1 原理
+//   fileopreate/UploadFileFilter.java
+public boolean isValidByWhiteList(File file) throws IOException {
 
-#### 1.2 修复方式
+        String fileName = file.getCanonicalFile().getName();
+        int index = fileName.lastIndexOf(".");
+        String suffix = fileName.substring(index + 1);
+        return super.getWhiteList().contains(suffix.toLowerCase());
+}
+```
 
-#### 1.3 最佳实践
+##### 限制上传的文件到指定的目录
+
+使用File对象的getCanonicalPath方法获取上传文件的实际路径，和指定目录进行对比，避免使用`../` 实现目录穿越
+
+```java
+public boolean isValidByAllowedDirectory(File file, String allowedDirectory) throws IOException {
+    String canonicalPath = file.getCanonicalFile().getPath();
+    if (System.getProperty("os.name").contains("Window")){
+        return canonicalPath.toLowerCase().contains(allowedDirectory.toLowerCase());
+    }else{
+        return canonicalPath.startsWith(allowedDirectory);
+    }
+}
+```
+
+##### 随机生成文件名
+
+```java
+public String generateUniqueFileName(String extName){
+    long currentTime = System.currentTimeMillis();
+    int num = (int)(new SecureRandom().nextDouble()*10000);
+    return currentTime + "" + num + extName;
+}
+```
+
+### 任意文件下载
+
+#### 原理
+
+服务器没有对下载的文件名和文件路径进行过滤，然而下载的文件名和路径用户是可控的，导致此漏洞存在。
+
+#### 修复方式
+
+1. 在处理下载的代码中对HTTP请求中的待下载文件参数进行过滤，防止出现..等特殊字符，但可能需要处理多种编码方式。
+2. 生成File对象后，使用getCanonicalPath获取当前文件的真实路径，判断文件是否在允许下载的目录中，若发现文件不在允许下载的目录中，则拒绝下载。**【推荐】**
+
+#### 最佳实践
+
+##### 限制下载的文件在指定目录
+
+```java
+public boolean isValidByAllowedDirectory(File file, String allowedDirectory) throws IOException {
+    String canonicalPath = file.getCanonicalFile().getPath();
+    if (System.getProperty("os.name").contains("Window")){
+        return canonicalPath.toLowerCase().contains(allowedDirectory.toLowerCase());
+    }else{
+        return canonicalPath.startsWith(allowedDirectory);
+    }
+}
+```
+
+### 任意文件遍历
+
+#### 原理
+
+攻击者可以通过漏洞遍历出服务器操作系统中的任意目录文件名，从而导致服务器敏感信息泄漏，某些场景下(如遍历出网站日志、备份文件、管理后台等)甚至可能会导致服务器被非法入侵。
+
+1. 同级目录遍历 `./`
+2. 越级目录遍历`../../../`
+3. 绝对路径遍历
+
+#### 修复方式
+
+1. 限制读取的文件和目录
+
+#### 最佳实践
+
+##### 【推荐】限制访问的目录
+
+使用File对象的getCanonicalPath方法获得读取文件的实际路径，和指定目录进行对比，避免使用`../` 实现目录穿越
+
+```java
+/**
+ * 方式一：检查文件路径是否在允许的目录下
+ * @param file  文件的对象
+ * @param allowedDirectory 允许的目录
+ * @return boolean true为合法，false不合法
+ * @throws IOException 异常
+ */
+public boolean isValidByAllowedDirectory(File file, String allowedDirectory) throws IOException {
+    String canonicalPath = file.getCanonicalFile().getPath();
+    if (System.getProperty("os.name").contains("Window")){
+        return canonicalPath.toLowerCase().contains(allowedDirectory.toLowerCase());
+    }else{
+        return canonicalPath.startsWith(allowedDirectory);
+    }
+}
+```
+
+##### 低版本JDK（jdk<1.8）禁止空字节访问
+
+示例
+
+```java
+/**
+ * 检查文件名中是否包含了空字节，禁止出现%00字符截断
+ *
+ * @param file 访问文件
+ * @return 是否包含空字节
+ */
+private static boolean nullByteValid(File file) {
+   return file.getName().indexOf('\u0000') < 1;
+}
+```
+
+##### 【不推荐】黑名单禁止动态脚本文件后缀
+
+禁止写入如下类型的动态脚本文件：
+
+```
+jsp,jspx,jspa,jspf,asp,asa,cer,aspx,php
+```
+
+##### 黑名单禁止读取的文件或者路径
+
+```
+WEB-INF/web.xml、/etc/passwd、../../../../../../../etc/passwd
+```
 
 ## 服务端请求伪造
 
 ### 原理
 
+攻击者伪造服务器获取资源的请求,通过服务器来攻击内部系统。比如端口扫描,读取默认文件判断服务架构,或者配合SQL注入等其他漏洞攻击内网的主机
+
+### 漏洞触发点
+
+SSRF常出现在URL中,比如分享,翻译,图片加载,文章收藏等功能
+
 ### 修复方式
 
+1. 禁用不需要的协议，只允许http和https请求，防止类似于file:///,gopher://,ftp://等引起的问题
+2. 将内网IP加入黑名单，请求的地址不能是内网IP
+3. 限制请求的端口，比如80，443，8080等，防止端口探测
+4. 限制错误信息回显，统一回显错误信息，避免用户根据回显获取信息
+5. 视业务而定，采用白名单方式设置允许访问的Host
+
 ### 最佳实践
+
+##### 白名单检查主机名是否可信
+
+白名单为域名
+
+```java
+/**
+ * 通过白名单检查主机名是否可信
+ * @param url url
+ * @return true/false
+ */
+public boolean isValidHostByWhiteList(String url){
+    URL urlAddress = null;
+    try {
+        urlAddress = new URL(url);
+    } catch (MalformedURLException e) {
+        logger.warn("非法的URL" + e);
+        return false;
+    }
+    //获取主域名
+    String topDomain = UrlUtils.getTopDomain(url);
+    if (topDomain !=null){
+        for (String s: super.getWhiteList()){
+            if (topDomain.equals(s)){
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+ public static String getTopDomain(String url){
+     try{
+         String host = new URL(url).getHost().toLowerCase();
+         //查找倒数第二个.的位置
+         int index = host.lastIndexOf(".", host.lastIndexOf(".") - 1);
+         return host.substring(index + 1);
+     }catch(MalformedURLException e){
+         logger.warn("非法的URL" + e);
+     }
+     return null;
+ }
+```
+
+##### 白名单检测请求的协议是否合法
+
+白名单为允许请求的协议
+
+```java
+   /**
+     * 白名单检查请求的协议是否合法
+     * @param url url
+     * @return true/false
+     */
+    public boolean isValidProtocolByWhiteList(String url){
+        try {
+            URL urlAddress = new URL(url);
+            if (super.getWhiteList().contains(urlAddress.getProtocol())){
+                return true;
+            }
+        } catch (MalformedURLException e) {
+            logger.warn("非法的URL" + e);
+        }
+        return false;
+    }
+```
+
+##### 黑名单检测请求的协议是否合法
+
+黑名单为禁止使用的协议
+
+```java
+/**
+     * 黑名单检查请求的协议是否合法
+     * @param url url
+     * @return true/false
+     */
+    public boolean isValidProtocolByBlackList(String url){
+        try {
+            URL urlAddress = new URL(url);
+            if (!super.getBlackList().contains(urlAddress.getProtocol())){
+                return true;
+            }
+        } catch (MalformedURLException e) {
+            logger.warn("非法的URL" + e);
+        }
+        return false;
+    }
+```
+
+## 其他问题
+
+### 统一错误页
+
+在web.xml中定义error-page，防止当出现错误时暴露服务器信息。
