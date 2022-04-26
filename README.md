@@ -143,6 +143,42 @@ Query query = session.createNativeQuery(sql); // Query query = session.createSQL
 query.setParameter("name", name);
 ```
 
+## NoSQL注入
+
+### 原理
+
+和SQL注入原理一样
+
+### 修复方式
+
+1. 【推荐】参数绑定
+
+### 最佳实践
+
+#### mongoDB
+
+##### 错误的示例
+
+拼接用户的查询权限条件
+
+```java
+String title = request.getParamenter("name");
+MongoCollection<Document> col = mongoClient.getDatabase("MyDB").getCollection("emails");
+BasicDBObject query = new BasicDBObject();
+query.put("$where", "this.title==\""+ title+"\"");
+FindIterable<Document> find = col.find(query);
+```
+
+##### 正确的示例
+
+```java
+String title = request.getParamenter("name");
+MongoCollection<Document> col = mongoClient.getDatabase("MyDB").getCollection("emails");
+BasicDBObject query = new BasicDBObject();
+query.put("$where", new BasicDBObject("$eq", title));
+FindIterable<Document> find = col.find(query);
+```
+
 ## 文件访问类
 
 ### 任意文件上传
@@ -321,7 +357,7 @@ SSRF常出现在URL中,比如分享,翻译,图片加载,文章收藏等功能
 
 ### 最佳实践
 
-##### 白名单检查主机名是否可信
+#### 白名单检查主机名是否可信
 
 白名单为域名
 
@@ -364,7 +400,7 @@ public boolean isValidHostByWhiteList(String url){
  }
 ```
 
-##### 白名单检测请求的协议是否合法
+#### 白名单检测请求的协议是否合法
 
 白名单为允许请求的协议
 
@@ -387,7 +423,7 @@ public boolean isValidHostByWhiteList(String url){
     }
 ```
 
-##### 黑名单检测请求的协议是否合法
+#### 黑名单检测请求的协议是否合法
 
 黑名单为禁止使用的协议
 
@@ -409,6 +445,131 @@ public boolean isValidHostByWhiteList(String url){
         return false;
     }
 ```
+
+#### 【建议】综合以上的防御方式
+
+协议白名单结合黑名单内网IP并判断302跳转
+
+```java
+/**
+     * 推荐的检测组合，白名单结合内网IP并判断302跳转
+     * @param url 需要检测的url
+     * @return boolean
+     */
+    public boolean checkUrl(String url){
+
+        HttpURLConnection httpURLConnection;
+        String finalUrl = url;
+
+        try {
+            do{
+            //判断协议和是否是内网IP
+                if (!isValidProtocolByWhiteList(url) && !isInnerIp(url)){
+                   return false;
+                }
+                //处理302跳转
+                httpURLConnection = (HttpURLConnection) new URL(finalUrl).openConnection();
+                httpURLConnection.setInstanceFollowRedirects(false);//不跟随跳转
+                httpURLConnection.setUseCaches(false);//不使用缓存
+                httpURLConnection.setConnectTimeout(5*1000);//设置超时时间
+                httpURLConnection.connect();//发送dns请求
+
+                int statusCode = httpURLConnection.getResponseCode(); //获取状态码
+                if(statusCode>=300 && statusCode<=307 && statusCode!=304 && statusCode!=306){
+                    String redirectedURL = httpURLConnection.getHeaderField("Location");
+                    if(null==redirectedURL){
+                        break;
+                    }
+                    finalUrl = redirectedURL;//获取跳转之后的url，再次进行判断
+                }else{
+                    break;
+                }
+            }while (httpURLConnection.getResponseCode()!=HttpURLConnection.HTTP_OK);//如果没有返回200，则继续对跳转后的链接进行检查
+            httpURLConnection.disconnect();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return true;
+    }
+
+    /**
+     * 判断是否为内网IP
+     * @param url 请求的url
+     * @return boolean
+     */
+    private static boolean isInnerIp(String url){
+
+        try {
+            URI uri = new URI(url);
+            String host = uri.getHost();
+            InetAddress inetAddress = InetAddress.getByName(host);
+            //获取IP
+            String ip = inetAddress.getHostAddress();
+            //内网IP段
+            String[] blackSubnetList = {"10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8"};
+            for (String subnet: blackSubnetList){
+                SubnetUtils subnetUtils = new SubnetUtils(subnet);
+                if (subnetUtils.getInfo().isInRange(ip)){
+                    return true; //如果IP段在内网中，返回
+                }
+            }
+        } catch (URISyntaxException | UnknownHostException e) {
+            logger.warn("解析错误uri " + e);
+        }
+        return false;
+    }
+```
+
+## URL重定向漏洞
+
+### 原理
+
+后台服务器在告知浏览器跳转时，未对客户端传入的重定向地址进行合法性校验，导致用户浏览器跳转到钓鱼页面的一种漏洞。
+
+### 修复方式
+
+1. 如果只希望在当前的域跳转，可做白名单限制，非白名单内的URL禁止跳转；
+2. 如果业务需要，可对于白名单内的地址，用户可无感知跳转，不在白名单内的地址**给用户风险提示**，用户选择是否跳转
+
+### 最佳实践
+
+#### 检测跳转的URL是否在白名单上
+
+```java
+/**
+     * 检查跳转的URL是否在白名单上
+     * @param url 检测的URL
+     * @return boolean
+     */
+    public boolean isWhiteList(String url){
+
+        //只允许http, https
+        String u = url.toLowerCase().trim();
+        if (!Pattern.matches("^https?.*$", u)){
+            return false;
+        }
+        URI uri = null;
+        try {
+            uri = new URI(u);
+            String host = uri.getHost();
+            //获取主域名
+            String topDomain = UrlUtils.getTopDomain(u);
+            List<String> whiteList = super.getWhiteList();
+            //如果域名在白名单或者主域名在白名单
+            if (whiteList.contains(host) || whiteList.contains(topDomain)){
+                return true;
+            }
+        } catch (URISyntaxException e) {
+            logger.warn("解析url错误：" + e );
+        }
+        return false;
+    }
+```
+
+#### 不在白名单内的地址给用户风险提示
+
+通过统一的跳转风险提示页面，让用户选择是否跳转。
 
 ## 其他问题
 
