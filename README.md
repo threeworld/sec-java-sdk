@@ -18,6 +18,10 @@ Java 安全 SDK，提供安全的、常见的 Java 安全编码规范和方法�
 
 [URL重定向漏洞](#urlredirect)
 
+[命令注入](#cmdinjection)
+
+[XSS](#xss)
+
 [其他问题](#other)
 
 ## <span id="sqlInjection">SQL注入</span>
@@ -101,6 +105,45 @@ Java 安全 SDK，提供安全的、常见的 Java 安全编码规范和方法�
      </foreach>
    </select>
    ```
+
+​		参数有多个时，一种可以使用`@Param("xxx")`进行参数绑定，另一种可以通过`Map`来传参数。
+
+@Param("xxx")方式	
+
+```java
+List<User> selectByIdSet(@Param("name")String name, @Param("ids")String[] idList);
+ 
+<select id="selectByIdSet" resultMap="BaseResultMap">
+	SELECT
+	<include refid="Base_Column_List" />
+	from t_user
+	WHERE  name=#{name,jdbcType=VARCHAR} and id IN
+	<foreach collection="ids" item="id" index="index"
+			 open="(" close=")" separator=",">
+	  #{id}
+	</foreach>
+</select>
+```
+
+Map方式
+
+```java
+Map<String, Object> params = new HashMap<String, Object>(2);
+params.put("name", name);
+params.put("idList", ids);
+mapper.selectByIdSet(params);
+ 
+<select id="selectByIdSet" resultMap="BaseResultMap">  
+     select  
+     <include refid="Base_Column_List" />  
+     from t_user where 
+     name = #{name}
+     and ID in  
+     <foreach item="item" index="index" collection="idList" open="(" separator="," close=")">  
+      #{item}  
+     </foreach>  
+</select>
+```
 
 #### Hibernate
 
@@ -545,6 +588,7 @@ public boolean isValidHostByWhiteList(String url){
 
 1. 如果只希望在当前的域跳转，可做白名单限制，非白名单内的URL禁止跳转；
 2. 如果业务需要，可对于白名单内的地址，用户可无感知跳转，不在白名单内的地址**给用户风险提示**，用户选择是否跳转
+3. 如果某个业务已经确定将要跳转的网站，最稳妥的方式是将其编码在源代码中，通过URL中传入的参数来映射跳转网址。
 
 ### 最佳实践
 
@@ -584,6 +628,161 @@ public boolean isValidHostByWhiteList(String url){
 #### 不在白名单内的地址给用户风险提示
 
 通过统一的跳转风险提示页面，让用户选择是否跳转。
+
+## <span id="cmdinjection"> 命令注入 </span>
+
+### 原理
+
+命令执行漏洞是指应用有时需要调用一些执行系统命令的函数，如果系统命令代码未对用户可控参数进行过滤，则当用户能控制这些函数的参数时，就可以将恶意系统命令拼接到正常命令中，从而造成命令执行工具。
+
+危害：
+
+1. 集成web服务程序的权限去执行系统命令或读/写文件
+2. 反弹shell
+3. 控制整个网站甚至服务器进行进一步的内网渗透
+
+### 修复方式
+
+1. 非必要不要拼接用户的输入作为命令进行执行
+2. 如果业务需要，使用白名单
+3. 精确匹配和限制用户提交的数据（前端后端都增加限制）
+
+### 最佳实践
+
+#### 错误的示例
+
+```java
+ public void test(HttpServletRequest request){
+     String ip = request.getParameter("ip");
+     //不加过滤直接拼接到执行的命令中
+     String exec = "ping "+ip;
+     ProcessBuilder p = null;
+     BufferedReader reader = null;
+     try {
+         //调用shell进行执行
+         p = new ProcessBuilder("bash","-c",exec);
+         p.start();
+         String line;
+         reader = new BufferedReader(new InputStreamReader(p.start().getInputStream(),"GBK"));
+         while((line=reader.readLine())!=null){
+             //System.out.println(line);
+         }
+     } catch (IOException e) {
+         e.printStackTrace();
+     }finally {
+         try {
+             reader.close();
+         } catch (IOException e) {
+             e.printStackTrace();
+         }
+     }
+ }
+```
+
+#### 正确的示例
+
+通过精确匹配用户输入的数据，不符合一律不执行，其次可以通过白名单方式匹配允许执行的命令。具体实现见源码`exec/ExecCmdFilter.java`
+
+```java
+ public void setRegex(String regex) {
+        this.regex = regex;
+    }
+
+    public String getRegx() {
+        return regex;
+    }
+
+    /**
+     * 判断用户提供的命令是否合法
+     * @param cmd 需要检测的命令
+     * @return boolean 是否合法
+     */
+    private String regex;
+
+    public boolean isValidCMD(String cmd){
+        String processedCmd = cmd.trim();
+        //精确匹配拼接用户输入的数据
+        //正则表达式为自定义
+        Boolean isMatch = Pattern.matches(regex, processedCmd);
+        Boolean isWhite = super.getWhiteList().contains(processedCmd);
+
+        return isMatch || isWhite;
+    }
+
+//测试代码
+public class ExecCmdFilterTest {
+
+    @Test
+    public void testIsValidCMD(){
+
+
+        ExecCmdFilter cmdFilter = ExecCmdFilter.getInstance();
+        //匹配IP的正则表达式
+        String regex = "((?:(?:25[0-5]|2[0-4]\\d|[01]?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|[01]?\\d?\\d))";
+        cmdFilter.setRegex(regex);
+        String cmd = "127.0.0.1;ls";
+        if (cmdFilter.isValidCMD(cmd)){
+            System.out.println("执行的命令合法");
+        }else{
+            System.out.println("执行的命令不合法");
+        }
+    }
+}
+```
+
+## <span id="xss"> XSS </span>
+
+### 原理
+
+Cross-Site Scripting（跨站脚本攻击）简称 XSS，是一种代码注入攻击。攻击者通过在目标网站上注入恶意脚本，使之在用户的浏览器上运行。利用这些恶意脚本，攻击者可获取用户的敏感信息如 Cookie、SessionID 等，进而危害数据安全。
+
+注入的方法
+
+- 在 HTML 中内嵌的文本中，恶意内容以 script 标签形成注入。
+- 在内联的 JavaScript 中，拼接的数据突破了原本的限制（字符串，变量，方法名等）。
+- 在标签属性中，恶意内容包含引号，从而突破属性值的限制，注入其他属性或者标签。
+- 在标签的 href、src 等属性中，包含 `javascript:` 等可执行代码。
+- 在 onload、onerror、onclick 等事件中，注入不受控制代码。
+- 在 style 属性和标签中，包含类似 `background-image:url("javascript:...");` 的代码（新版本浏览器已经可以防范）。
+- 在 style 属性和标签中，包含类似 `expression(...)` 的 CSS 表达式代码（新版本浏览器已经可以防范）。
+
+### 修复方式
+
+目前主流最新版浏览器对内置了预防XSS的措施。**防御XSS的核心就是对不可信数据进行正确的编码。所以只有在正确的地方使用正确的编码才能消除XSS漏洞。**
+
+1. 预防存储型和反射型 XSS通常有两种做法
+   1. 改成纯前端渲染，把代码和数据分隔开。要避免DOM型XSS
+   2. 对 HTML 做充分转义
+2. 使用HttpOnly，禁止页面通过JavaScript访问cookie
+3. 输入检查
+   1. 输入检查基本先在用户浏览器中进行。例如， 用户注册时的用户名，当要求只能为字母、数字的组合时，就需要进行严格的过滤。其他的，比如电话、邮件、生日等等，都要有一定 的格式规范。对特殊字符进行编码或者过滤。在服务端代码也需要进行输入规范的逻辑检查。
+   2. 客户端使用JavaScript检查可以阻挡大部分正常用户的误操作，减小服务端再次验证的资源浪费。
+4. 输出检查
+5. 预防DOM 型 XSS 攻击，在使用 `.innerHTML`、`.outerHTML`、`document.write()` 时要特别小心，不要把不可信的数据作为 HTML 插到页面上，而应尽量使用 `.textContent`、`.setAttribute()` 等。
+6. Content Security Policy
+
+### 最佳实践
+
+java工程中，常用的转义库为 `org.owasp.encoder`
+
+```java
+//插入不可信数据到HTML标签之间时，进行HTML Entity编码
+String encodedContent = ESAPI.encoder().encodeForHTML(request.getParameter(“input”));
+
+//插入不可信数据到HTML属性里时，进行HTML属性编码
+String encodedContent = ESAPI.encoder().encodeForHTMLAttribute(request.getParameter(“input”));
+
+//插入不可信数据到SCRIPT里时，进行JavaScript编码
+String encodedContent = ESAPI.encoder().encodeForJavaScript(request.getParameter(“input”));
+
+//插入不可信数据到Style属性里时，进行CSS编码
+String encodedContent = ESAPI.encoder().encodeForCSS(request.getParameter(“input”));
+
+//插入不可信数据到HTML URL里时，进行URL编码
+//当需要往HTML页面中的URL里插入不可信数据的时候，需要对其进行URL编码，如下：
+//<a href=”http://www.abcd.com?param=…插入不可信数据前，进行URL编码…”> Link Content </a>
+String encodedContent = ESAPI.encoder().encodeForURL(request.getParameter(“input”));
+```
 
 ## <span id="other">其他问题</span>
 
