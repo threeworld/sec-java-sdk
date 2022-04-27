@@ -4,9 +4,23 @@ Java 安全 SDK，提供安全的、常见的 Java 安全编码规范和方法�
 
 # 项目结构
 
+源码完善后上传
+
 # 常见的漏洞说明
 
-## SQL 注入
+[SQL注入](#sqlInjection)
+
+[NoSQL注入](#NosqlInjection)
+
+[文件访问类](#fileoperate)
+
+[服务端请求伪造](#ssrf)
+
+[URL重定向漏洞](#urlredirect)
+
+[其他问题](#other)
+
+## <span id="sqlInjection">SQL注入</span>
 
 ### 原理
 
@@ -143,7 +157,7 @@ Query query = session.createNativeQuery(sql); // Query query = session.createSQL
 query.setParameter("name", name);
 ```
 
-## NoSQL注入
+## <span id="NosqlInjection">NoSQL注入</span>
 
 ### 原理
 
@@ -179,7 +193,7 @@ query.put("$where", new BasicDBObject("$eq", title));
 FindIterable<Document> find = col.find(query);
 ```
 
-## 文件访问类
+## <span id="fileoperate">文件访问类 </span>
 
 ### 任意文件上传
 
@@ -233,7 +247,7 @@ public boolean isValidByAllowedDirectory(File file, String allowedDirectory) thr
 }
 ```
 
-##### 随机生成文件名
+##### 随机生成文件名并限定后缀
 
 ```java
 public String generateUniqueFileName(String extName){
@@ -337,7 +351,7 @@ jsp,jspx,jspa,jspf,asp,asa,cer,aspx,php
 WEB-INF/web.xml、/etc/passwd、../../../../../../../etc/passwd
 ```
 
-## 服务端请求伪造
+## <span id="ssrf">服务端请求伪造 </span>
 
 ### 原理
 
@@ -521,7 +535,7 @@ public boolean isValidHostByWhiteList(String url){
     }
 ```
 
-## URL重定向漏洞
+## <span id="urlredirect">URL重定向漏洞</span>
 
 ### 原理
 
@@ -571,7 +585,7 @@ public boolean isValidHostByWhiteList(String url){
 
 通过统一的跳转风险提示页面，让用户选择是否跳转。
 
-## 其他问题
+## <span id="other">其他问题</span>
 
 ### 统一错误页
 
