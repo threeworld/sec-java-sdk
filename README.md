@@ -6,7 +6,7 @@ Java 安全 SDK，提供安全的、常见的 Java 安全编码规范和方法�
 
 源码完善后上传
 
-# 常见的漏洞说明
+# 常见的漏洞和对应的安全编码方法
 
 [SQL注入](#sqlInjection)
 
@@ -782,6 +782,29 @@ String encodedContent = ESAPI.encoder().encodeForCSS(request.getParameter(“inp
 //当需要往HTML页面中的URL里插入不可信数据的时候，需要对其进行URL编码，如下：
 //<a href=”http://www.abcd.com?param=…插入不可信数据前，进行URL编码…”> Link Content </a>
 String encodedContent = ESAPI.encoder().encodeForURL(request.getParameter(“input”));
+```
+
+## <span id="spel"> SPEL表达式注入</span>
+
+### 原理
+
+产生SpEL表达式注入漏洞的大前提是存在SpEL的相关库。产生SpEL表达式注入漏洞主要原因是，很大一部分开发人员未对用户输入进行处理就直接通过解析引擎对SpEL继续解析。一旦用户能够控制解析的SpEL语句，便可以通过反射的方式构造执行的命令，从而达到RCE的目的。
+
+### 修复方式
+
+1. 使用 `SimpleEvaluationContext` 替换 `StandardEvaluationContext`，该类抛弃了Java类型引用、构造函数及bean引用
+
+### 最佳实践
+
+示例：
+
+```java
+String spel = "T(java.lang.Runtime).getRuntime().exec(\"calc\")";
+ExpressionParser parser = new SpelExpressionParser();
+Student student = new Student();
+EvaluationContext context =SimpleEvaluationContext.forReadOnlyDataBinding().withRootObject(student).build();
+Expression expression = parser.parseExpression(spel);
+System.out.println(expression.getValue(context));
 ```
 
 ## <span id="other">其他问题</span>
