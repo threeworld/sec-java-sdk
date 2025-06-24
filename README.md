@@ -82,6 +82,22 @@ Java 安全 SDK，提供安全的、常见的 Java 安全编码规范和方法�
    	order by ${sortBy}
      </if>
    </select>
+
+   <!-- 安全的写法 - 使用参数化查询 -->
+   <select id="getUsers" resultType="User">
+    SELECT * FROM users 
+    ORDER BY 
+    <choose>
+        <when test="orderBy == 'name'">name</when>
+        <when test="orderBy == 'age'">age</when>
+        <when test="orderBy == 'email'">email</when>
+        <otherwise>id</otherwise>
+    </choose>
+    <choose>
+        <when test="direction == 'desc'">DESC</when>
+        <otherwise>ASC</otherwise>
+    </choose>
+   </select>
    ```
 
 2. **like 语句:** 使用 bind 标签来构造新参数，然后再使用 #{}。另外需要过滤通配符等特殊字符，避免 DOS。
